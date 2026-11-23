@@ -1,0 +1,54 @@
+workflows:
+  android-apk:
+    name: APEX CARNIVAL - Android APK
+    instance_type: mac_mini_m2        # free-plan machine
+    max_build_duration: 30
+    environment:
+      node: 20
+      java: 17
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+          source: true
+    scripts:
+      - name: Unzip project (app.zip is in repo root)
+        script: |
+          if [ -f app.zip ]; then
+            unzip -oq app.zip -x codemagic.yaml README.md || python3 -m zipfile -e app.zip .
+          fi
+          ls -la
+      - name: Write macOS-safe prepare script
+        script: |
+          cat > scripts/prepare-android.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -e
+          RES=android/app/src/main/res
+          MAIN=android/app/src/main
+          rm -f $RES/drawable-v24/ic_launcher_foreground.xml
+          rm -f $RES/mipmap-*/ic_launcher*.png $RES/mipmap-anydpi-v26/ic_launcher*.xml
+          cp -r resources/android/res/* $RES/
+          find $RES -name 'splash.png' ! -path "$RES/drawable/splash.png" -exec cp resources/android/res/drawable/splash.png {} \;
+          perl -0pi -e 's#(name="AppTheme\.NoActionBar"[^>]*>.*?)(</style>)#$1    <item name="android:windowFullscreen">true</item>\n        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>\n    $2#s' $RES/values/styles.xml
+          sed -i.bak 's#<activity#<activity android:screenOrientation="sensorLandscape"#' $MAIN/AndroidManifest.xml
+          rm -f $MAIN/AndroidManifest.xml.bak
+          cp resources/android/java/MainActivity.java $MAIN/java/com/apexcarnival/game/MainActivity.java
+          echo "Android project prepared."
+          EOF
+      - name: Install dependencies
+        script: npm install
+      - name: Create Android project
+        script: |
+          npx cap add android
+          bash scripts/prepare-android.sh
+          npx cap sync android
+      - name: Build debug APK
+        script: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > android/local.properties
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+    artifacts:
+      - android/app/build/outputs/**/*.apk
